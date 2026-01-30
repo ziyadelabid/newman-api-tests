@@ -7,21 +7,19 @@ pipeline {
   }
 
   stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
-
     stage('Install / Build / Newman') {
-      steps {
-        script {
-          docker.image('node:20-bullseye').inside('-u root:root') {
-            sh 'corepack enable'
-            sh 'pnpm --version'
-            sh 'pnpm install --frozen-lockfile'
-            sh 'pnpm run build'
-            sh 'bash scripts/run-newman-ci.sh'
-          }
+      agent {
+        docker {
+          image 'node:20-bullseye'
+          args '-u root:root'
         }
+      }
+      steps {
+        sh 'corepack enable'
+        sh 'pnpm --version'
+        sh 'pnpm install --frozen-lockfile'
+        sh 'pnpm run build'
+        sh 'bash scripts/run-newman-ci.sh'
       }
       post {
         always {
