@@ -1,6 +1,11 @@
 pipeline {
   agent any
 
+  tools {
+    // Requires the Jenkins "NodeJS" plugin + a configured Node installation with this name.
+    nodejs 'node20'
+  }
+
   environment {
     PORT = '4444'
     TOKEN_SECRET = 'dev-secret'
@@ -8,14 +13,10 @@ pipeline {
 
   stages {
     stage('Install / Build / Newman') {
-      agent {
-        docker {
-          image 'node:20-bullseye'
-          args '-u root:root'
-        }
-      }
       steps {
-        sh 'corepack enable'
+        sh 'node --version'
+        sh 'npm --version'
+        sh 'npm i -g pnpm@9'
         sh 'pnpm --version'
         sh 'pnpm install --frozen-lockfile'
         sh 'pnpm run build'
