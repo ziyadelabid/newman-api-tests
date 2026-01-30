@@ -11,20 +11,18 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Install') {
+    stage('Install / Build / Newman') {
       steps {
-        sh 'corepack enable'
-        sh 'pnpm --version'
-        sh 'pnpm install --frozen-lockfile'
+        script {
+          docker.image('node:20-bullseye').inside('-u root:root') {
+            sh 'corepack enable'
+            sh 'pnpm --version'
+            sh 'pnpm install --frozen-lockfile'
+            sh 'pnpm run build'
+            sh 'bash scripts/run-newman-ci.sh'
+          }
+        }
       }
-    }
-
-    stage('Build') {
-      steps { sh 'pnpm run build' }
-    }
-
-    stage('Newman (flaky on purpose)') {
-      steps { sh 'bash scripts/run-newman-ci.sh' }
       post {
         always {
           junit allowEmptyResults: true, testResults: 'reports/newman.xml'
@@ -34,4 +32,3 @@ pipeline {
     }
   }
 }
-
