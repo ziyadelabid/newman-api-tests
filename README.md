@@ -47,6 +47,35 @@ There are two Create User requests:
 - **Create user (bad createdAt assertion)** (intentionally flaky/failing)
 - **Create user (good createdAt assertion)** (fixed version)
 
+### Flaky example (time-based data)
+
+If you want a test that **passes or fails randomly** due to time-based data, run:
+
+```bash
+pnpm run ci:newman:flaky-data
+```
+
+It runs `postman/flaky-data.postman_collection.json`, which hits the real endpoints:
+
+- `POST /auth/login`
+- `POST /users`
+- `DELETE /users/:id`
+
+And includes an intentionally flaky assertion on `createdAt` (millisecond timestamp parity).
+
+### Data dependency example (login token → downstream request)
+
+If you want an example of **data dependency** (a failed login means the token isn’t set, so `/me` fails), run:
+
+```bash
+pnpm run ci:newman:data-dependency
+```
+
+It runs `postman/data-dependency.postman_collection.json`, which contains:
+
+- **Bad (dependency failure)**: Login uses `{{password}}` (not set) and still tries to set `token`, then `/me` fails.
+- **Fixed (guard dependency)**: Login asserts `200`, checks `accessToken`, and aborts the run on failure.
+
 ## Jenkins
 
 `Jenkinsfile` runs a “flaky on purpose” Newman stage and publishes `reports/newman.xml`.

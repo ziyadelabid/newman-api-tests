@@ -1,0 +1,321 @@
+{
+  "info": {
+    "name": "Mini User Service (scripts cookbook)",
+    "_postman_id": "dbf3b8ed-3d5f-4b14-a681-2f66aeb2e238",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Examples of pre-request scripts + post-request tests using the real API endpoints. Covers dynamic data, header injection, correlation IDs, extracting/storing values, JWT parsing, and simple control flow."
+  },
+  "item": [
+    {
+      "name": "00 - Setup",
+      "item": [
+        {
+          "name": "Healthcheck (loop until API ready)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/", "host": ["{{baseUrl}}"], "path": [""] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API responds with 200 when ready', function () {",
+                  "  // This service intentionally returns 503 for ~1–2 seconds after boot.",
+                  "  // Running this request repeatedly will eventually pass.",
+                  "  pm.expect([200, 503]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "if (pm.response.code !== 200) {",
+                  "  // Basic Postman control-flow trick: loop the same request until it becomes healthy.",
+                  "  postman.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  postman.setNextRequest('Login (capture token + decode JWT)');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 - Pre-request scripts",
+      "item": [
+        {
+          "name": "Create user (dynamic body + headers from pre-request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Correlation-Id", "value": "{{correlationId}}" },
+              { "key": "X-Body-Sha256", "value": "{{bodySha256}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{newUserEmail}}\",\n  \"password\": \"{{newUserPassword}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Generate unique data so reruns don't hit the unique-email constraint.",
+                  "const unique = pm.variables.replaceIn('{{$timestamp}}') + '_' + Math.floor(Math.random() * 10000);",
+                  "pm.environment.set('newUserEmail', `cookbook_${unique}@example.com`);",
+                  "pm.environment.set('newUserPassword', 'pass123');",
+                  "",
+                  "// Correlation IDs are useful for tracing in logs (even if this demo API ignores it).",
+                  "pm.environment.set('correlationId', pm.variables.replaceIn('{{$guid}}'));",
+                  "",
+                  "// Cool trick: hash the request body so you can log/verify what was sent.",
+                  "// CryptoJS is available in the Postman sandbox.",
+                  "const rawBody = pm.request.body && pm.request.body.raw ? pm.request.body.raw : '';",
+                  "const bodyResolved = pm.variables.replaceIn(rawBody);",
+                  "const sha = CryptoJS.SHA256(bodyResolved).toString(CryptoJS.enc.Hex);",
+                  "pm.environment.set('bodySha256', sha);",
+                  "",
+                  "// Pre-request scripts can also change headers dynamically.",
+                  "pm.request.headers.upsert({ key: 'X-Client-Timestamp', value: String(Date.now()) });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('creates user (201)', function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('response has stable shape', function () {",
+                  "  pm.expect(json).to.have.property('id');",
+                  "  pm.expect(json.id).to.be.a('string').and.not.empty;",
+                  "  pm.expect(json).to.have.property('email', pm.environment.get('newUserEmail'));",
+                  "  pm.expect(json).to.have.property('createdAt');",
+                  "  pm.expect(json.createdAt).to.be.a('number');",
+                  "});",
+                  "",
+                  "pm.environment.set('userId', json.id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - Post-request scripts",
+      "item": [
+        {
+          "name": "Login (capture token + decode JWT)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"demo@example.com\",\n  \"password\": \"password\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login succeeds (200)', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('returns Bearer token', function () {",
+                  "  pm.expect(json).to.have.property('accessToken');",
+                  "  pm.expect(json.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(json.tokenType).to.eql('Bearer');",
+                  "});",
+                  "",
+                  "// Save for later requests.",
+                  "pm.environment.set('token', json.accessToken);",
+                  "",
+                  "// Cool trick: decode the JWT payload and assert something meaningful.",
+                  "function b64UrlDecode(input) {",
+                  "  const b64 = input.replace(/-/g, '+').replace(/_/g, '/');",
+                  "  const pad = '='.repeat((4 - (b64.length % 4)) % 4);",
+                  "  return CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(b64 + pad));",
+                  "}",
+                  "",
+                  "const parts = String(json.accessToken).split('.');",
+                  "pm.test('token looks like a JWT', function () {",
+                  "  pm.expect(parts).to.have.length(3);",
+                  "});",
+                  "",
+                  "const payload = JSON.parse(b64UrlDecode(parts[1]));",
+                  "pm.test('JWT payload contains expected claims', function () {",
+                  "  pm.expect(payload).to.have.property('email', 'demo@example.com');",
+                  "  pm.expect(payload).to.have.property('sub');",
+                  "  pm.expect(payload.sub).to.be.a('string').and.not.empty;",
+                  "  pm.expect(payload).to.have.property('iat');",
+                  "  pm.expect(payload.iat).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get me (adds Authorization header in pre-request)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Pre-request can enforce dependencies and fail fast with a helpful message.",
+                  "const token = pm.environment.get('token');",
+                  "pm.expect(token, 'Missing token: run the Login request first').to.be.a('string').and.not.empty;",
+                  "",
+                  "// Inject auth header dynamically (instead of hardcoding it in the request).",
+                  "pm.request.headers.upsert({ key: 'Authorization', value: `Bearer ${token}` });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('returns my profile (200)', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('profile matches seeded user', function () {",
+                  "  pm.expect(json).to.have.property('email', 'demo@example.com');",
+                  "  pm.expect(json).to.have.property('id');",
+                  "  pm.expect(json.id).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - Control flow (skip / cleanup)",
+      "item": [
+        {
+          "name": "Get user by id (skips create if already have userId)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// If the userId isn't set yet, jump to Create user first.",
+                  "const userId = pm.environment.get('userId');",
+                  "if (!userId) {",
+                  "  postman.setNextRequest('Create user (dynamic body + headers from pre-request)');",
+                  "}",
+                  "",
+                  "// If userId exists, proceed as normal.",
+                  "pm.environment.set('userId', userId || '');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('fetches user (200)', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('id matches requested id', function () {",
+                  "  pm.expect(json.id).to.eql(pm.environment.get('userId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete user (cleanup; only if token+userId exist)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.environment.get('token');",
+                  "const userId = pm.environment.get('userId');",
+                  "",
+                  "if (!token || !userId) {",
+                  "  // Skip cleanup if prerequisites are missing (common in demos).",
+                  "  postman.setNextRequest(null);",
+                  "} else {",
+                  "  pm.request.headers.upsert({ key: 'Authorization', value: `Bearer ${token}` });",
+                  "}",
+                  ""
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('deletes user (200)', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('deleted true', function () {",
+                  "  pm.expect(json).to.have.property('deleted', true);",
+                  "});",
+                  "",
+                  "// Cleanup environment so the next run starts clean.",
+                  "pm.environment.unset('userId');",
+                  "pm.environment.unset('newUserEmail');",
+                  "pm.environment.unset('newUserPassword');",
+                  "pm.environment.unset('correlationId');",
+                  "pm.environment.unset('bodySha256');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+

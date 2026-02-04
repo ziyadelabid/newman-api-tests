@@ -1,0 +1,64 @@
+name: newman
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      PORT: "4444"
+      TOKEN_SECRET: dev-secret
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9 --activate
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Start API + Newman
+        run: |
+          set -euo pipefail
+
+          mkdir -p reports
+
+          node dist/main.js &
+          api_pid=$!
+
+          cleanup() {
+            kill "$api_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 50); do
+            if node -e "const http=require('http'); const req=http.get('http://localhost:'+process.env.PORT+'/', (res)=>process.exit(res.statusCode===200?0:1)); req.on('error', ()=>process.exit(1));" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.2
+          done
+
+          pnpm newman:run
+
+      - name: Upload Newman report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-report
+          path: reports/**
+          if-no-files-found: warn
+

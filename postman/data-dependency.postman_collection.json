@@ -1,0 +1,170 @@
+{
+  "info": {
+    "name": "Mini User Service (data dependency: auth token)",
+    "_postman_id": "d4c68882-71a7-4e0c-96a8-380d078ae9c4",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Shows a bad data dependency (downstream request assumes login token exists) and a fixed approach (assert + guard)."
+  },
+  "item": [
+    {
+      "name": "Bad: Unchecked auth dependency",
+      "item": [
+        {
+          "name": "Login (bad: no status check; token may be empty)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"demo@example.com\",\n  \"password\": \"wrong-password\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Intentionally bad: no status check, so a 401 doesn't fail this step.",
+                  "pm.test('response is JSON', function () {",
+                  "  pm.expect(function () {",
+                  "    pm.response.json();",
+                  "  }).to.not.throw();",
+                  "});",
+                  "",
+                  "// Also intentionally bad: if login fails, this sets an empty token and the run continues.",
+                  "const json = pm.response.json();",
+                  "const token = typeof json.accessToken === 'string' ? json.accessToken : '';",
+                  "pm.environment.set('token', token);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get me (bad: assumes token exists)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200 (fails because login token was never set)', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('returns my profile', function () {",
+                  "  pm.expect(json.email).to.eql('demo@example.com');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fixed: Guarded auth dependency",
+      "item": [
+        {
+          "name": "Login (good: assert 200 + capture token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"demo@example.com\",\n  \"password\": \"password\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "if (pm.response.code !== 200) {",
+                  "  // Stop the run so downstream requests don't fail with confusing 401s.",
+                  "  postman.setNextRequest(null);",
+                  "}",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('returns Bearer token', function () {",
+                  "  pm.expect(json).to.have.property('accessToken');",
+                  "  pm.expect(json.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(json.tokenType).to.eql('Bearer');",
+                  "});",
+                  "pm.environment.set('token', json.accessToken);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Guard (good: fail fast if token missing)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/", "host": ["{{baseUrl}}"], "path": [""] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('token is set from login (dependency satisfied)', function () {",
+                  "  const token = pm.environment.get('token');",
+                  "  pm.expect(token, 'Missing token: the login step failed or did not set it').to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "if (!pm.environment.get('token')) {",
+                  "  postman.setNextRequest(null);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get me (good: uses token + verifies identity)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', function () {",
+                    "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('returns seeded demo user', function () {",
+                  "  pm.expect(json).to.have.property('email', 'demo@example.com');",
+                  "  pm.expect(json).to.have.property('id');",
+                  "  pm.expect(json.id).to.be.a('string').and.not.empty;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
